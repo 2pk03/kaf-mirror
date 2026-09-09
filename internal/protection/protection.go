@@ -53,10 +53,12 @@ type Status struct {
 }
 
 type Controller struct {
-	mu      sync.Mutex
-	db      *sqlx.DB
-	cfg     config.ProtectionConfig
-	samples []timedSample
+	mu        sync.Mutex
+	db        *sqlx.DB
+	cfg       config.ProtectionConfig
+	samples   []timedSample
+	hits      []ingestHit
+	baselines map[string]*topicBaseline
 }
 
 type timedSample struct {

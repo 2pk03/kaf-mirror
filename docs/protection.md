@@ -32,7 +32,7 @@ Any of these halt **all running jobs** (pause, do not auto-restart):
 2. `POST /api/v1/protection/halt` with `{"reason":"..."}`
 3. Create the halt file (`data/HALT` by default, `protection.halt_file`)
 4. Set `KAF_MIRROR_HALT=1` (`protection.halt_env`)
-5. Auto-halt (experimental): tombstone storm, produce/auth error burst, or payload inflation while source lag collapses
+5. Auto-halt (experimental): tombstone storm, produce/auth error burst, payload inflation while source lag collapses, or **high-entropy rewrite of existing keys** (the encrypt-in-place pattern). Entropy and key-rewrite share the same `protection` / `auto_halt` switch — no per-detector knobs.
 
 Resume (`protection resume`) clears the API/DB halt only. **Remove the file and unset the env** or the process stays halted. Jobs do not restart by themselves; start them after you trust the source.
 
@@ -46,4 +46,12 @@ Out-of-band file/env still work if the API is unusable.
 
 ## Auto-halt
 
-Off unless protection is enabled. Heuristics are coarse. Prefer the admin halt or the HALT file when you know source is on fire.
+Off unless protection is enabled (`auto_halt.enabled`, default true in config). All detectors share that switch.
+
+The live incident was ciphertext **rewritten onto existing keys**, not tombstones. Detectors:
+
+- **Entropy vs per-topic baseline** (Shannon on up to 1KiB of the value). Absolute high entropy is not enough — compressed protobuf already looks random. The baseline only moves on *normal* samples so a ciphertext flood cannot redefine “typical”.
+- **Key rewrite rate**: same key, new value, many keys in 60s.
+- Halt if both fire, or if entropy is high on a large volume of records (unique-key topics have no rewrite signal).
+
+Coarse. Prefer the admin halt or the HALT file when you know source is on fire. This does not see S3 SSE-C encryption under kafscale; those objects are storage-side.

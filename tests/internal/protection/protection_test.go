@@ -12,6 +12,7 @@
 package protection_test
 
 import (
+	"crypto/rand"
 	"os"
 	"path/filepath"
 	"testing"
@@ -72,6 +73,53 @@ func TestAutoHaltTombstoneStorm(t *testing.T) {
 	assert.Equal(t, "", ctrl.Observe(protection.Sample{Consumed: 0, Tombstones: 0}))
 	reason := ctrl.Observe(protection.Sample{Consumed: 20, Tombstones: 15})
 	assert.Contains(t, reason, "tombstone")
+}
+
+func TestAutoHaltEntropyAndKeyRewrite(t *testing.T) {
+	db, err := database.InitDB(":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	ctrl := protection.New(db, config.ProtectionConfig{
+		AutoHalt: config.AutoHaltConfig{Enabled: true},
+	})
+	require.NoError(t, ctrl.SetEnabled(true))
+
+	jsonVal := []byte(`{"user":"alice","status":"active","city":"berlin","ok":true}`)
+	for i := 0; i < 25; i++ {
+		key := []byte{byte(i % 20)}
+		assert.Equal(t, "", ctrl.Ingest("events", key, jsonVal))
+	}
+
+	enc := make([]byte, 256)
+	_, err = rand.Read(enc)
+	require.NoError(t, err)
+	var reason string
+	for i := 0; i < 50; i++ {
+		key := []byte{byte(i % 20)}
+		reason = ctrl.Ingest("events", key, enc)
+		if reason != "" {
+			break
+		}
+	}
+	t.Logf("status=%+v reason=%q", ctrl.Status(), reason)
+	assert.Contains(t, reason, "high-entropy")
+}
+
+func TestAutoHaltEntropyIgnoredWhenDisabled(t *testing.T) {
+	db, err := database.InitDB(":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	ctrl := protection.New(db, config.ProtectionConfig{
+		AutoHalt: config.AutoHaltConfig{Enabled: true},
+	})
+	enc := make([]byte, 256)
+	_, err = rand.Read(enc)
+	require.NoError(t, err)
+	for i := 0; i < 80; i++ {
+		assert.Equal(t, "", ctrl.Ingest("events", []byte{byte(i)}, enc))
+	}
 }
 
 func TestNormalizeRole(t *testing.T) {

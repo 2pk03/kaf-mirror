@@ -616,6 +616,16 @@ func (jm *JobManager) StartJob(jobID string) error {
 		return err
 	}
 
+	if inspector, ok := kafMirror.(kafka.RecordInspector); ok && jm.Protection != nil {
+		inspector.SetRecordHook(func(topic string, key, value []byte) {
+			if reason := jm.Protection.Ingest(topic, key, value); reason != "" {
+				logger.Error("protection auto-halt: %s", reason)
+				_ = jm.Protection.Halt(reason, "auto")
+				go jm.HaltRunningJobs(reason)
+			}
+		})
+	}
+
 	logger.Info("Starting job '%s' (%s)", job.Name, jobID)
 	kafMirror.Start(jobID, jm.ProcessMetrics, jm.handleJobPanic)
 	jm.KafMirrors[jobID] = kafMirror
