@@ -10,6 +10,11 @@ This document outlines the access levels for each API endpoint based on user rol
 | `GET /api/v1/version` | `any` |
 | `GET /metrics` | `any` |
 | `POST /auth/token` | `any` (rate limited) |
+| `GET /api/v1/protection/` | any authenticated user |
+| `POST /api/v1/protection/enable` | `protection:manage` (admin) |
+| `POST /api/v1/protection/disable` | `protection:manage` (admin) |
+| `POST /api/v1/protection/halt` | `protection:manage` (admin) |
+| `POST /api/v1/protection/resume` | `protection:manage` (admin) |
 
 ## Auth
 

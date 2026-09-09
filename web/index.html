@@ -293,6 +293,7 @@
             <button class="logout" onclick="logout()">Logout</button>
         </div>
     </div>
+    <div id="protection-banner" style="display:none;background:#b71c1c;color:#fff;padding:0.75rem 1.5rem;font-weight:600;"></div>
     
     <div class="nav">
         <ul>
@@ -496,6 +497,28 @@
             return marked.parse(escapeHtml(value), { async: false });
         }
 
+        function loadProtectionBanner() {
+            const token = getAuthToken();
+            if (!token) return;
+            fetch('/api/v1/protection/', { headers: { 'Authorization': 'Bearer ' + token } })
+                .then(r => r.ok ? r.json() : null)
+                .then(st => {
+                    const el = document.getElementById('protection-banner');
+                    if (!el || !st) return;
+                    if (st.halted) {
+                        el.style.display = 'block';
+                        el.textContent = 'Replication halted: ' + (st.halt_reason || 'halt file or KAF_MIRROR_HALT') + '. All jobs are paused. Resume does not restart them.';
+                    } else if (st.enabled) {
+                        el.style.display = 'block';
+                        el.style.background = '#e65100';
+                        el.textContent = 'Replication halt is on (experimental). Jobs that write into a prod cluster are blocked. To freeze all jobs: mirror-cli protection halt';
+                    } else {
+                        el.style.display = 'none';
+                    }
+                })
+                .catch(() => {});
+        }
+
         function getAuthToken() {
             const sessionToken = sessionStorage.getItem('token');
             if (sessionToken) return sessionToken;
@@ -514,6 +537,8 @@
             setupTimeRangeButtons();
             loadData();
             loadVersion();
+            loadProtectionBanner();
+            setInterval(loadProtectionBanner, 5000);
             
             // Set up automatic data refresh every 30 seconds
             setInterval(() => {

@@ -24,6 +24,7 @@ type KafkaCluster struct {
 	APISecret        string    `db:"api_secret" json:"api_secret"`
 	ConnectionString *string   `db:"connection_string" json:"connection_string"`
 	Status           string    `db:"status" json:"status"`
+	Role             string    `db:"role" json:"role"`
 	UpdatedAt        time.Time `db:"updated_at" json:"updated_at"`
 }
 
@@ -67,6 +68,7 @@ type ReplicationMetric struct {
 	CriticalLag        bool      `db:"-" json:"critical_lag"`
 	HighErrorRate      bool      `db:"-" json:"high_error_rate"`
 	ErrorSpike         bool      `db:"-" json:"error_spike"`
+	TombstoneCount     int64     `db:"-" json:"tombstone_count"`
 	Timestamp          time.Time `db:"timestamp" json:"timestamp"`
 }
 

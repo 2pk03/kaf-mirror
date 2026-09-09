@@ -287,34 +287,22 @@ func (a *AdminClient) GetConsumerGroupOffsets(ctx context.Context, groupID strin
 }
 
 func (a *AdminClient) GetTopicHighWaterMarks(ctx context.Context, topics []string) (map[string][]OffsetInfo, error) {
-	logger.Info("Retrieving high water marks for topics: %v", topics)
-
-	result := make(map[string][]OffsetInfo)
-
-	for _, topicName := range topics {
-		topicDetails, err := a.client.ListTopics(ctx, topicName)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get metadata for topic %s: %w", topicName, err)
-		}
-
-		details, exists := topicDetails[topicName]
-		if !exists {
-			logger.Warn("Topic %s not found", topicName)
-			continue
-		}
-
-		for _, partition := range details.Partitions {
-			offsetInfo := OffsetInfo{
-				Topic:         topicName,
-				Partition:     partition.Partition,
-				Offset:        0,
-				HighWaterMark: 0,
-				Lag:           0,
-			}
-			result[topicName] = append(result[topicName], offsetInfo)
-		}
+	listed, err := a.client.ListEndOffsets(ctx, topics...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list end offsets: %w", err)
 	}
-
+	result := make(map[string][]OffsetInfo)
+	listed.Each(func(o kadm.ListedOffset) {
+		if o.Err != nil {
+			return
+		}
+		result[o.Topic] = append(result[o.Topic], OffsetInfo{
+			Topic:         o.Topic,
+			Partition:     o.Partition,
+			Offset:        o.Offset,
+			HighWaterMark: o.Offset,
+		})
+	})
 	return result, nil
 }
 
@@ -473,7 +461,7 @@ func (a *AdminClient) CompareClusterOffsets(ctx context.Context, sourceAdmin *Ad
 
 		if comparison.TotalLag > 10000 {
 			result.Warnings = append(result.Warnings,
-				fmt.Sprintf("High replication lag detected for %s -> %s: %d messages",
+				fmt.Sprintf("end offsets differ for %s -> %s by %d (not a cross-cluster record gap)",
 					sourceTopic, targetTopic, comparison.TotalLag))
 		}
 	}
@@ -528,12 +516,6 @@ func (a *AdminClient) compareTopicOffsets(ctx context.Context, sourceAdmin *Admi
 		}
 
 		gap := sourceOffset.HighWaterMark - targetOffset.HighWaterMark
-		hasGap := gap > 0
-
-		if hasGap {
-			comparison.GapsDetected++
-		}
-
 		comparison.TotalLag += gap
 
 		safeResumeOffset := targetOffset.HighWaterMark
@@ -549,7 +531,7 @@ func (a *AdminClient) compareTopicOffsets(ctx context.Context, sourceAdmin *Admi
 			TargetHighWaterMark: targetOffset.HighWaterMark,
 			Gap:                 gap,
 			SafeResumeOffset:    safeResumeOffset,
-			HasGap:              hasGap,
+			HasGap:              false,
 		})
 	}
 

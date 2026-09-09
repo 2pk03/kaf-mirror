@@ -24,6 +24,7 @@
 - **Dashboard updates:** The web UI polls the API every 30 seconds. `/ws` accepts authenticated WebSocket clients via an `Authorization: Bearer` header.
 - **Offset commit:** Source offsets are committed only after the target produce is acknowledged.
 - **Secrets:** Cluster and config APIs return `***` for credentials. PUT with `***` or an empty secret leaves the stored value unchanged.
+- **Replication halt (experimental):** Off until an admin enables it. Freezes all jobs if the source cluster is compromised so the replica does not keep copying the attack. See [docs/protection.md](docs/protection.md).
 
 ## Getting Started
 

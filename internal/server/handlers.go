@@ -18,6 +18,7 @@ import (
 	"kaf-mirror/internal/config"
 	"kaf-mirror/internal/database"
 	"kaf-mirror/internal/kafka"
+	"kaf-mirror/internal/protection"
 	"kaf-mirror/pkg/utils"
 	"log"
 	"strconv"
@@ -194,7 +195,7 @@ func (s *Server) handleListClusters(c *fiber.Ctx) error {
 
 // handleCreateCluster godoc
 // @Summary Create a new Kafka cluster
-// @Description Create a new Kafka cluster configuration.
+// @Description Create a new Kafka cluster. Optional role is prod, dr, or other (default other).
 // @Tags clusters
 // @Accept json
 // @Produce json
@@ -208,6 +209,7 @@ func (s *Server) handleCreateCluster(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "Invalid request body")
 	}
 
+	cluster.Role = protection.NormalizeRole(cluster.Role)
 	if err := database.CreateCluster(s.Db, &cluster); err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "Failed to create cluster")
 	}
@@ -255,6 +257,10 @@ func (s *Server) handleUpdateCluster(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusNotFound, "Cluster not found")
 	}
 	cluster.RestoreUnchangedSecrets(existing)
+	if cluster.Role == "" {
+		cluster.Role = existing.Role
+	}
+	cluster.Role = protection.NormalizeRole(cluster.Role)
 	if err := database.UpdateCluster(s.Db, &cluster); err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "Failed to update cluster")
 	}
@@ -498,6 +504,10 @@ type CreateJobRequest struct {
 	PreservePartitions bool                    `json:"preserve_partitions"`
 }
 
+type HaltProtectionRequest struct {
+	Reason string `json:"reason"`
+}
+
 // handleCreateJob godoc
 // @Summary Create a new replication job
 // @Description Create a new replication job.
@@ -512,6 +522,12 @@ func (s *Server) handleCreateJob(c *fiber.Ctx) error {
 	var req CreateJobRequest
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	if target, err := database.GetCluster(s.Db, req.TargetClusterName); err == nil && s.manager.Protection != nil {
+		if err := s.manager.Protection.GuardStart(target.Role); err != nil {
+			return fiber.NewError(fiber.StatusConflict, err.Error())
+		}
 	}
 
 	job := &database.ReplicationJob{
@@ -1643,6 +1659,105 @@ func (s *Server) handleResetOwnToken(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"token": token})
 }
 
+// handleGetProtection godoc
+// @Summary Get replication-halt status
+// @Description Experimental kill-switch. Off until an admin enables it. Any authenticated user can read status.
+// @Tags protection
+// @Produce json
+// @Success 200 {object} protection.Status
+// @Router /protection [get]
+// @Security ApiKeyAuth
+func (s *Server) handleGetProtection(c *fiber.Ctx) error {
+	if s.manager.Protection == nil {
+		return c.JSON(fiber.Map{"enabled": false, "experimental": true})
+	}
+	return c.JSON(s.manager.Protection.Status())
+}
+
+// handleEnableProtection godoc
+// @Summary Enable replication halt
+// @Description Turns on the experimental kill-switch (admin, protection:manage). Jobs into prod clusters are then refused.
+// @Tags protection
+// @Produce json
+// @Success 200 {object} protection.Status
+// @Router /protection/enable [post]
+// @Security ApiKeyAuth
+func (s *Server) handleEnableProtection(c *fiber.Ctx) error {
+	if s.manager.Protection == nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "protection controller missing")
+	}
+	if err := s.manager.Protection.SetEnabled(true); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+	return c.JSON(s.manager.Protection.Status())
+}
+
+// handleDisableProtection godoc
+// @Summary Disable replication halt
+// @Description Turns the kill-switch off and clears an API halt. Does not restart jobs. Admin, protection:manage.
+// @Tags protection
+// @Produce json
+// @Success 200 {object} protection.Status
+// @Router /protection/disable [post]
+// @Security ApiKeyAuth
+func (s *Server) handleDisableProtection(c *fiber.Ctx) error {
+	if s.manager.Protection == nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "protection controller missing")
+	}
+	_ = s.manager.Protection.Resume()
+	if err := s.manager.Protection.SetEnabled(false); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+	return c.JSON(s.manager.Protection.Status())
+}
+
+// handleHaltProtection godoc
+// @Summary Halt all replication jobs
+// @Description Pauses every running job. Protection must already be enabled. Admin, protection:manage.
+// @Tags protection
+// @Accept json
+// @Produce json
+// @Param request body server.HaltProtectionRequest false "Halt reason"
+// @Success 200 {object} protection.Status
+// @Failure 409 {object} map[string]interface{}
+// @Router /protection/halt [post]
+// @Security ApiKeyAuth
+func (s *Server) handleHaltProtection(c *fiber.Ctx) error {
+	if s.manager.Protection == nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "protection controller missing")
+	}
+	var req HaltProtectionRequest
+	_ = c.BodyParser(&req)
+	user, _ := c.Locals("user").(*database.User)
+	by := "admin"
+	if user != nil {
+		by = user.Username
+	}
+	if err := s.manager.Protection.Halt(req.Reason, by); err != nil {
+		return fiber.NewError(fiber.StatusConflict, err.Error())
+	}
+	s.manager.HaltRunningJobs(s.manager.Protection.Status().HaltReason)
+	return c.JSON(s.manager.Protection.Status())
+}
+
+// handleResumeProtection godoc
+// @Summary Resume after an API halt
+// @Description Clears a CLI/API halt only. Remove data/HALT and unset KAF_MIRROR_HALT if you used those. Does not restart jobs. Admin, protection:manage.
+// @Tags protection
+// @Produce json
+// @Success 200 {object} protection.Status
+// @Router /protection/resume [post]
+// @Security ApiKeyAuth
+func (s *Server) handleResumeProtection(c *fiber.Ctx) error {
+	if s.manager.Protection == nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "protection controller missing")
+	}
+	if err := s.manager.Protection.Resume(); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+	return c.JSON(s.manager.Protection.Status())
+}
+
 // handleGetMe godoc
 // @Summary Get the current user's profile
 // @Description Get the current user's profile.
@@ -2355,34 +2470,21 @@ func (s *Server) handleValidateMigration(c *fiber.Ctx) error {
 	}
 
 	topicMap := make(map[string]string)
+	var concrete []string
 	for _, mapping := range mappings {
-		if mapping.Enabled {
-			topicMap[mapping.SourceTopicPattern] = mapping.TargetTopicPattern
+		if !mapping.Enabled {
+			continue
+		}
+		topicMap[mapping.SourceTopicPattern] = mapping.TargetTopicPattern
+		if !strings.ContainsAny(mapping.SourceTopicPattern, `.*+?()[]{}^$|`) {
+			concrete = append(concrete, mapping.SourceTopicPattern)
 		}
 	}
 
-	// Create cluster configs
-	sourceConfig := config.ClusterConfig{
-		Provider: sourceCluster.Provider,
-		Brokers:  sourceCluster.Brokers,
-		Security: config.SecurityConfig{
-			APIKey:    sourceCluster.APIKey,
-			APISecret: sourceCluster.APISecret,
-		},
-	}
-
-	targetConfig := config.ClusterConfig{
-		Provider: targetCluster.Provider,
-		Brokers:  targetCluster.Brokers,
-		Security: config.SecurityConfig{
-			APIKey:    targetCluster.APIKey,
-			APISecret: targetCluster.APISecret,
-		},
-	}
+	sourceConfig := database.ClusterConfigFromRow(*sourceCluster)
+	targetConfig := database.ClusterConfigFromRow(*targetCluster)
 
 	ctx := context.Background()
-
-	// Create admin clients
 	sourceAdmin, err := kafka.NewAdminClient(sourceConfig)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "Failed to create source admin client")
@@ -2395,52 +2497,28 @@ func (s *Server) handleValidateMigration(c *fiber.Ctx) error {
 	}
 	defer targetAdmin.Close()
 
-	// Perform cross-cluster offset comparison
-	offsetComparison, err := targetAdmin.CompareClusterOffsets(ctx, sourceAdmin, topicMap)
-	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "Failed to compare cluster offsets")
-	}
-
-	// Analyze mirror state
 	consumerGroup := fmt.Sprintf("kaf-mirror-job-%s", jobID)
-	mirrorAnalysis, err := targetAdmin.AnalyzeMirrorState(ctx, sourceAdmin, jobID, topicMap, consumerGroup)
+	verify, err := kafka.VerifyMirror(ctx, sourceAdmin, targetAdmin, topicMap, consumerGroup, concrete)
 	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "Failed to analyze mirror state")
+		return fiber.NewError(fiber.StatusInternalServerError, "Failed to verify mirror: "+err.Error())
 	}
 
-	// Determine migration safety
-	migrationSafe := offsetComparison.TotalGapsDetected == 0 && len(offsetComparison.CriticalIssues) == 0
 	riskLevel := "low"
-
-	if offsetComparison.TotalGapsDetected > 0 {
+	if len(verify.Critical) > 0 {
 		riskLevel = "high"
-	} else if len(offsetComparison.Warnings) > 0 {
+	} else if len(verify.Warnings) > 0 || verify.SourceConsumerLag > 10000 {
 		riskLevel = "medium"
 	}
 
-	recommendations := make([]string, 0)
-	if !migrationSafe {
-		recommendations = append(recommendations, "Migration not recommended due to detected gaps or critical issues")
-		recommendations = append(recommendations, "Review offset comparison results and resolve gaps before migration")
-	} else {
-		recommendations = append(recommendations, "Migration appears safe to proceed")
-		recommendations = append(recommendations, "Monitor replication closely after migration")
-	}
-
-	result := fiber.Map{
-		"job_id":            jobID,
-		"migration_safe":    migrationSafe,
-		"risk_level":        riskLevel,
-		"gaps_detected":     offsetComparison.TotalGapsDetected,
-		"critical_issues":   len(offsetComparison.CriticalIssues),
-		"warnings":          len(offsetComparison.Warnings),
-		"offset_comparison": offsetComparison,
-		"mirror_analysis":   mirrorAnalysis,
-		"recommendations":   recommendations,
-		"validated_at":      time.Now(),
-	}
-
-	return c.JSON(result)
+	return c.JSON(fiber.Map{
+		"job_id":              jobID,
+		"migration_safe":      len(verify.Critical) == 0,
+		"risk_level":          riskLevel,
+		"source_consumer_lag": verify.SourceConsumerLag,
+		"verify":              verify,
+		"recommendations":     []string{"Use source consumer-group lag and topic presence; do not treat source vs target offsets as the same records."},
+		"validated_at":        time.Now(),
+	})
 }
 
 // handleCreateMigrationCheckpoint godoc

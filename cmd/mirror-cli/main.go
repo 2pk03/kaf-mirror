@@ -766,7 +766,7 @@ It interacts with the kaf-mirror API to perform various tasks.`,
 	addClusterCmd = &cobra.Command{
 		Use:   "add",
 		Short: "Add a new cluster.",
-		Long:  `This command adds a new Kafka cluster with the specified name and brokers.`,
+		Long:  `Adds a Kafka cluster (name, provider, brokers, and role: other, prod, or dr).`,
 		Run: func(cmd *cobra.Command, args []string) {
 			token, err := LoadToken()
 			if err != nil {
@@ -848,11 +848,23 @@ It interacts with the kaf-mirror API to perform various tasks.`,
 				}
 			}
 
+			var role string
+			promptRole := &survey.Select{
+				Message: "Cluster role:",
+				Options: []string{"other", "prod", "dr"},
+				Default: "other",
+			}
+			if err := survey.AskOne(promptRole, &role); err != nil {
+				fmt.Println("Operation cancelled.")
+				return
+			}
+
 			clusterData := map[string]interface{}{
 				"name":       name,
 				"provider":   provider,
 				"cluster_id": clusterID,
 				"brokers":    brokers,
+				"role":       role,
 				"security": map[string]string{
 					"api_key":    apiKey,
 					"api_secret": apiSecret,
@@ -934,6 +946,7 @@ It interacts with the kaf-mirror API to perform various tasks.`,
 				"name":     name,
 				"provider": provider,
 				"brokers":  brokers,
+				"role":     role,
 			}
 
 			if provider == "confluent" {
@@ -1257,7 +1270,7 @@ It interacts with the kaf-mirror API to perform various tasks.`,
 
 	var editClusterCmd = &cobra.Command{
 		Use:   "edit [name]",
-		Short: "Edit an existing cluster.",
+		Short: "Edit an existing cluster (including role: other, prod, or dr).",
 		Long:  `This command allows you to edit the name and brokers of an existing Kafka cluster.`,
 		Args:  cobra.MaximumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
@@ -1320,6 +1333,7 @@ It interacts with the kaf-mirror API to perform various tasks.`,
 			// Display current cluster information including provider
 			fmt.Printf("=== Editing Cluster: %s ===\n", safeString(currentCluster["name"], ""))
 			fmt.Printf("Provider: %s (non-editable)\n", provider)
+			fmt.Printf("Role: %s\n", safeString(currentCluster["role"], "other"))
 			fmt.Printf("Current Brokers: %s\n", safeString(currentCluster["brokers"], "not set"))
 			if provider == "confluent" {
 				fmt.Printf("Current Cluster ID: %s\n", safeString(currentCluster["cluster_id"], "not set"))
@@ -1465,11 +1479,22 @@ It interacts with the kaf-mirror API to perform various tasks.`,
 				fmt.Println("Connection test successful.")
 			}
 
-			// Prepare the update request in the correct format matching database.KafkaCluster struct
+			var role string
+			promptRole := &survey.Select{
+				Message: "Cluster role:",
+				Options: []string{"other", "prod", "dr"},
+				Default: safeString(currentCluster["role"], "other"),
+			}
+			if err := survey.AskOne(promptRole, &role); err != nil {
+				fmt.Println("Operation cancelled.")
+				return
+			}
+
 			updateCluster := map[string]interface{}{
 				"name":     newName,
 				"provider": provider,
 				"brokers":  newBrokers,
+				"role":     role,
 			}
 
 			if provider == "confluent" {
@@ -1615,7 +1640,125 @@ It interacts with the kaf-mirror API to perform various tasks.`,
 
 	jobsCmd := createJobsCommand()
 	docsCmd := createDocsCommand()
-	rootCmd.AddCommand(loginCmd, logoutCmd, usersCmd, clustersCmd, jobsCmd, configCmd, tlsCmd, newDashboardCmd(), whoamiCmd, docsCmd)
+	protectionCmd := &cobra.Command{
+		Use:   "protection",
+		Short: "Replication halt (experimental, admin)",
+		Long:  "Kill-switch for kaf-mirror. Off until an admin runs protection enable (must be logged in). See docs/protection.md.",
+	}
+	protectionCmd.AddCommand(&cobra.Command{
+		Use:   "status",
+		Short: "Show whether halt is enabled or active",
+		Run: func(cmd *cobra.Command, args []string) {
+			token, err := LoadToken()
+			if err != nil {
+				fmt.Println("Error: You must be logged in.")
+				return
+			}
+			req, _ := http.NewRequest("GET", fmt.Sprintf("%s/api/v1/protection/", BackendURL), nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			resp, err := httpClient.Do(req)
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
+			defer resp.Body.Close()
+			body, _ := ioutil.ReadAll(resp.Body)
+			fmt.Println(string(body))
+		},
+	})
+	protectionCmd.AddCommand(&cobra.Command{
+		Use:   "enable",
+		Short: "Turn the kill-switch on (admin)",
+		Run: func(cmd *cobra.Command, args []string) {
+			token, err := LoadToken()
+			if err != nil {
+				fmt.Println("Error: You must be logged in.")
+				return
+			}
+			req, _ := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/protection/enable", BackendURL), nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			resp, err := httpClient.Do(req)
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
+			defer resp.Body.Close()
+			body, _ := ioutil.ReadAll(resp.Body)
+			fmt.Println(string(body))
+		},
+	})
+	protectionCmd.AddCommand(&cobra.Command{
+		Use:   "disable",
+		Short: "Turn the kill-switch off (admin)",
+		Run: func(cmd *cobra.Command, args []string) {
+			token, err := LoadToken()
+			if err != nil {
+				fmt.Println("Error: You must be logged in.")
+				return
+			}
+			req, _ := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/protection/disable", BackendURL), nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			resp, err := httpClient.Do(req)
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
+			defer resp.Body.Close()
+			body, _ := ioutil.ReadAll(resp.Body)
+			fmt.Println(string(body))
+		},
+	})
+	protectionCmd.AddCommand(&cobra.Command{
+		Use:   "halt [reason]",
+		Short: "Pause every running job (admin)",
+		Args:  cobra.MaximumNArgs(32),
+		Run: func(cmd *cobra.Command, args []string) {
+			token, err := LoadToken()
+			if err != nil {
+				fmt.Println("Error: You must be logged in.")
+				return
+			}
+			reason := "admin halt"
+			if len(args) > 0 {
+				reason = strings.Join(args, " ")
+			}
+			reqBody, _ := json.Marshal(map[string]string{"reason": reason})
+			req, _ := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/protection/halt", BackendURL), bytes.NewBuffer(reqBody))
+			req.Header.Set("Authorization", "Bearer "+token)
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := httpClient.Do(req)
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
+			defer resp.Body.Close()
+			body, _ := ioutil.ReadAll(resp.Body)
+			fmt.Println(string(body))
+		},
+	})
+	protectionCmd.AddCommand(&cobra.Command{
+		Use:   "resume",
+		Short: "Clear a CLI/API halt. Does not restart jobs.",
+		Run: func(cmd *cobra.Command, args []string) {
+			token, err := LoadToken()
+			if err != nil {
+				fmt.Println("Error: You must be logged in.")
+				return
+			}
+			req, _ := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/protection/resume", BackendURL), nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			resp, err := httpClient.Do(req)
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
+			defer resp.Body.Close()
+			body, _ := ioutil.ReadAll(resp.Body)
+			fmt.Println(string(body))
+		},
+	})
+
+	rootCmd.AddCommand(loginCmd, logoutCmd, usersCmd, clustersCmd, jobsCmd, configCmd, tlsCmd, newDashboardCmd(), whoamiCmd, docsCmd, protectionCmd)
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 
 	return rootCmd

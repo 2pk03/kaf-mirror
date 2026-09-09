@@ -37,3 +37,13 @@ replication:
 
 egress:
   allowed_hosts: []
+
+protection:
+  enabled: false
+  halt_file: "data/HALT"
+  halt_env: "KAF_MIRROR_HALT"
+  auto_halt:
+    enabled: true
+    tombstone_ratio: 0.5
+    tombstone_min: 100
+    auth_error_burst: 50

@@ -146,9 +146,12 @@ func CreateCluster(db *sqlx.DB, cluster *KafkaCluster) error {
 		}
 	}
 
-	query := `INSERT INTO kafka_clusters (name, provider, cluster_id, brokers, security_config, api_key, api_secret, connection_string)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-	_, err = db.Exec(query, cluster.Name, cluster.Provider, cluster.ClusterID, cluster.Brokers, cluster.SecurityConfig, cluster.APIKey, cluster.APISecret, cluster.ConnectionString)
+	if cluster.Role == "" {
+		cluster.Role = "other"
+	}
+	query := `INSERT INTO kafka_clusters (name, provider, cluster_id, brokers, security_config, api_key, api_secret, connection_string, role)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	_, err = db.Exec(query, cluster.Name, cluster.Provider, cluster.ClusterID, cluster.Brokers, cluster.SecurityConfig, cluster.APIKey, cluster.APISecret, cluster.ConnectionString, cluster.Role)
 	return err
 }
 
@@ -175,10 +178,13 @@ func UpdateCluster(db *sqlx.DB, cluster *KafkaCluster) error {
 		}
 	}
 
+	if cluster.Role == "" {
+		cluster.Role = "other"
+	}
 	query := `UPDATE kafka_clusters 
-              SET provider = ?, cluster_id = ?, brokers = ?, security_config = ?, api_key = ?, api_secret = ?, connection_string = ?
+              SET provider = ?, cluster_id = ?, brokers = ?, security_config = ?, api_key = ?, api_secret = ?, connection_string = ?, role = ?
               WHERE name = ?`
-	_, err = db.Exec(query, cluster.Provider, cluster.ClusterID, cluster.Brokers, cluster.SecurityConfig, cluster.APIKey, cluster.APISecret, cluster.ConnectionString, cluster.Name)
+	_, err = db.Exec(query, cluster.Provider, cluster.ClusterID, cluster.Brokers, cluster.SecurityConfig, cluster.APIKey, cluster.APISecret, cluster.ConnectionString, cluster.Role, cluster.Name)
 	return err
 }
 

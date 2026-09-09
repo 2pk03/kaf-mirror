@@ -239,41 +239,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/auth/token": {
-            "post": {
-                "description": "Generate a new API token for the authenticated user.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "auth"
-                ],
-                "summary": "Generate a new API token",
-                "parameters": [
-                    {
-                        "description": "User credentials",
-                        "name": "credentials",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/server.tokenRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    }
-                }
-            }
-        },
         "/clusters": {
             "get": {
                 "security": [
@@ -307,7 +272,7 @@ const docTemplate = `{
                         "ApiKeyAuth": []
                     }
                 ],
-                "description": "Create a new Kafka cluster configuration.",
+                "description": "Create a new Kafka cluster. Optional role is prod, dr, or other (default other).",
                 "consumes": [
                     "application/json"
                 ],
@@ -2315,6 +2280,151 @@ const docTemplate = `{
                 }
             }
         },
+        "/protection": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Experimental kill-switch. Off until an admin enables it. Any authenticated user can read status.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "protection"
+                ],
+                "summary": "Get replication-halt status",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/protection.Status"
+                        }
+                    }
+                }
+            }
+        },
+        "/protection/disable": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Turns the kill-switch off and clears an API halt. Does not restart jobs. Admin, protection:manage.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "protection"
+                ],
+                "summary": "Disable replication halt",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/protection.Status"
+                        }
+                    }
+                }
+            }
+        },
+        "/protection/enable": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Turns on the experimental kill-switch (admin, protection:manage). Jobs into prod clusters are then refused.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "protection"
+                ],
+                "summary": "Enable replication halt",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/protection.Status"
+                        }
+                    }
+                }
+            }
+        },
+        "/protection/halt": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Pauses every running job. Protection must already be enabled. Admin, protection:manage.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "protection"
+                ],
+                "summary": "Halt all replication jobs",
+                "parameters": [
+                    {
+                        "description": "Halt reason",
+                        "name": "request",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/server.HaltProtectionRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/protection.Status"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/protection/resume": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Clears a CLI/API halt only. Remove data/HALT and unset KAF_MIRROR_HALT if you used those. Does not restart jobs. Admin, protection:manage.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "protection"
+                ],
+                "summary": "Resume after an API halt",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/protection.Status"
+                        }
+                    }
+                }
+            }
+        },
         "/topics/source": {
             "get": {
                 "security": [
@@ -2646,6 +2756,23 @@ const docTemplate = `{
                 }
             }
         },
+        "config.AutoHaltConfig": {
+            "type": "object",
+            "properties": {
+                "authErrorBurst": {
+                    "type": "integer"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "tombstoneMin": {
+                    "type": "integer"
+                },
+                "tombstoneRatio": {
+                    "type": "number"
+                }
+            }
+        },
         "config.ClusterConfig": {
             "type": "object",
             "properties": {
@@ -2654,6 +2781,10 @@ const docTemplate = `{
                 },
                 "clusterID": {
                     "type": "string"
+                },
+                "disableIdempotentWrites": {
+                    "description": "DisableIdempotentWrites forces the producer into non-idempotent mode.\nSet this to true when the target broker does not implement the\nKafka INIT_PRODUCER_ID API (API key 22). As of 2026-04, this applies\nto KafScale; see OPS-004.",
+                    "type": "boolean"
                 },
                 "provider": {
                     "type": "string"
@@ -2710,11 +2841,17 @@ const docTemplate = `{
                 "database": {
                     "$ref": "#/definitions/config.DatabaseConfig"
                 },
+                "egress": {
+                    "$ref": "#/definitions/config.EgressConfig"
+                },
                 "logging": {
                     "$ref": "#/definitions/config.LoggingConfig"
                 },
                 "monitoring": {
                     "$ref": "#/definitions/config.MonitoringConfig"
+                },
+                "protection": {
+                    "$ref": "#/definitions/config.ProtectionConfig"
                 },
                 "replication": {
                     "$ref": "#/definitions/config.ReplicationConfig"
@@ -2738,6 +2875,17 @@ const docTemplate = `{
                 },
                 "retentionDays": {
                     "type": "integer"
+                }
+            }
+        },
+        "config.EgressConfig": {
+            "type": "object",
+            "properties": {
+                "allowedHosts": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },
@@ -2801,6 +2949,26 @@ const docTemplate = `{
                 }
             }
         },
+        "config.ProtectionConfig": {
+            "type": "object",
+            "properties": {
+                "autoHalt": {
+                    "$ref": "#/definitions/config.AutoHaltConfig"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "haltEnv": {
+                    "type": "string"
+                },
+                "haltFile": {
+                    "type": "string"
+                },
+                "refuseWriteToProd": {
+                    "type": "boolean"
+                }
+            }
+        },
         "config.ReplicationConfig": {
             "type": "object",
             "properties": {
@@ -2824,13 +2992,13 @@ const docTemplate = `{
         "config.SecurityConfig": {
             "type": "object",
             "properties": {
-                "apikey": {
+                "api_key": {
                     "type": "string"
                 },
-                "apisecret": {
+                "api_secret": {
                     "type": "string"
                 },
-                "connectionString": {
+                "connection_string": {
                     "type": "string"
                 },
                 "enabled": {
@@ -2839,7 +3007,7 @@ const docTemplate = `{
                 "kerberos": {
                     "type": "object",
                     "properties": {
-                        "serviceName": {
+                        "service_name": {
                             "type": "string"
                         }
                     }
@@ -2850,7 +3018,7 @@ const docTemplate = `{
                 "protocol": {
                     "type": "string"
                 },
-                "saslmechanism": {
+                "sasl_mechanism": {
                     "type": "string"
                 },
                 "username": {
@@ -2874,6 +3042,9 @@ const docTemplate = `{
             "properties": {
                 "adminEmail": {
                     "type": "string"
+                },
+                "allowInsecure": {
+                    "type": "boolean"
                 },
                 "cors": {
                     "type": "object",
@@ -3255,6 +3426,9 @@ const docTemplate = `{
                 "provider": {
                     "type": "string"
                 },
+                "role": {
+                    "type": "string"
+                },
                 "security_config": {
                     "type": "string"
                 },
@@ -3485,6 +3659,9 @@ const docTemplate = `{
                 },
                 "timestamp": {
                     "type": "string"
+                },
+                "tombstone_count": {
+                    "type": "integer"
                 }
             }
         },
@@ -3632,6 +3809,41 @@ const docTemplate = `{
                 }
             }
         },
+        "protection.Status": {
+            "type": "object",
+            "properties": {
+                "auto_halt_enabled": {
+                    "type": "boolean"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "env_tripwire": {
+                    "type": "boolean"
+                },
+                "experimental": {
+                    "type": "boolean"
+                },
+                "file_tripwire": {
+                    "type": "boolean"
+                },
+                "halt_reason": {
+                    "type": "string"
+                },
+                "halted": {
+                    "type": "boolean"
+                },
+                "halted_at": {
+                    "type": "string"
+                },
+                "halted_by": {
+                    "type": "string"
+                },
+                "refuse_write_to_prod": {
+                    "type": "boolean"
+                }
+            }
+        },
         "server.CreateJobRequest": {
             "type": "object",
             "properties": {
@@ -3664,6 +3876,14 @@ const docTemplate = `{
                 }
             }
         },
+        "server.HaltProtectionRequest": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string"
+                }
+            }
+        },
         "server.changePasswordRequest": {
             "type": "object",
             "properties": {
@@ -3682,17 +3902,6 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "role": {
-                    "type": "string"
-                },
-                "username": {
-                    "type": "string"
-                }
-            }
-        },
-        "server.tokenRequest": {
-            "type": "object",
-            "properties": {
-                "password": {
                     "type": "string"
                 },
                 "username": {
@@ -3720,7 +3929,7 @@ const docTemplate = `{
 
 // SwaggerInfo holds exported Swagger Info so clients can modify it
 var SwaggerInfo = &swag.Spec{
-	Version:          "1.0",
+	Version:          "1.2.0",
 	Host:             "localhost:8080",
 	BasePath:         "/api/v1",
 	Schemes:          []string{},

@@ -35,6 +35,42 @@ type Config struct {
 	Monitoring  MonitoringConfig         `mapstructure:"monitoring"`
 	Compliance  ComplianceConfig         `mapstructure:"compliance"`
 	Egress      EgressConfig             `mapstructure:"egress"`
+	Protection  ProtectionConfig         `mapstructure:"protection"`
+}
+
+type ProtectionConfig struct {
+	Enabled           bool           `mapstructure:"enabled"`
+	HaltFile          string         `mapstructure:"halt_file"`
+	HaltEnv           string         `mapstructure:"halt_env"`
+	RefuseWriteToProd bool           `mapstructure:"refuse_write_to_prod"`
+	AutoHalt          AutoHaltConfig `mapstructure:"auto_halt"`
+}
+
+type AutoHaltConfig struct {
+	Enabled        bool    `mapstructure:"enabled"`
+	TombstoneRatio float64 `mapstructure:"tombstone_ratio"`
+	TombstoneMin   int     `mapstructure:"tombstone_min"`
+	AuthErrorBurst int     `mapstructure:"auth_error_burst"`
+}
+
+func (p ProtectionConfig) WithDefaults() ProtectionConfig {
+	if p.HaltFile == "" {
+		p.HaltFile = "data/HALT"
+	}
+	if p.HaltEnv == "" {
+		p.HaltEnv = "KAF_MIRROR_HALT"
+	}
+	if p.AutoHalt.TombstoneRatio == 0 {
+		p.AutoHalt.TombstoneRatio = 0.5
+	}
+	if p.AutoHalt.TombstoneMin == 0 {
+		p.AutoHalt.TombstoneMin = 100
+	}
+	if p.AutoHalt.AuthErrorBurst == 0 {
+		p.AutoHalt.AuthErrorBurst = 50
+	}
+	p.RefuseWriteToProd = true
+	return p
 }
 
 type EgressConfig struct {

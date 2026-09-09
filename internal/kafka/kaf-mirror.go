@@ -35,6 +35,10 @@ type KafMirror interface {
 	GetProducer() *Producer
 }
 
+type RecordInspector interface {
+	SetRecordHook(func(topic string, key, value []byte))
+}
+
 // KafMirrorImpl orchestrates the replication from a source to a target Kafka cluster.
 type KafMirrorImpl struct {
 	Consumer          *Consumer
@@ -55,6 +59,11 @@ type KafMirrorImpl struct {
 	// Incident tracking to prevent spam logging
 	incidentStates map[string]bool
 	incidentMutex  sync.RWMutex
+	recordHook     func(topic string, key, value []byte)
+}
+
+func (r *KafMirrorImpl) SetRecordHook(h func(topic string, key, value []byte)) {
+	r.recordHook = h
 }
 
 type regexMapping struct {
@@ -205,6 +214,9 @@ func (r *KafMirrorImpl) handleRecord(record *kgo.Record) error {
 	if targetTopic == "" {
 		logger.Warn("No mapping found for topic: %s", record.Topic)
 		return nil
+	}
+	if r.recordHook != nil {
+		r.recordHook(string(record.Topic), record.Key, record.Value)
 	}
 
 	// Analyze message size for compression recommendations
@@ -384,17 +396,18 @@ func (r *KafMirrorImpl) collectMetrics(ctx context.Context, jobID string, callba
 
 			metric := database.ReplicationMetric{
 				JobID:              jobID,
-				MessagesReplicated: int(totalMessages),      // Total messages replicated (acked)
-				BytesTransferred:   int(totalBytes),         // Total bytes transferred (acked)
-				MessagesConsumed:   int(totalConsumed),      // Total messages consumed
-				BytesConsumed:      int(totalConsumedBytes), // Total bytes consumed
-				CurrentLag:         int(currentLag),         // Current consumer lag
-				ErrorCount:         int(totalErrors),        // Total errors
+				MessagesReplicated: int(totalMessages),
+				BytesTransferred:   int(totalBytes),
+				MessagesConsumed:   int(totalConsumed),
+				BytesConsumed:      int(totalConsumedBytes),
+				CurrentLag:         int(currentLag),
+				ErrorCount:         int(totalErrors),
 				SourceStalled:      sourceStalled,
 				TargetStalled:      targetStalled,
 				CriticalLag:        criticalLag,
 				HighErrorRate:      highErrorRate,
 				ErrorSpike:         errorSpike,
+				TombstoneCount:     consumerMetrics.Tombstones,
 				Timestamp:          time.Now(),
 			}
 

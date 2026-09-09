@@ -20,6 +20,7 @@ import (
 	"kaf-mirror/internal/database"
 	"kaf-mirror/internal/kafka"
 	"kaf-mirror/internal/metrics"
+	"kaf-mirror/internal/protection"
 	"kaf-mirror/pkg/logger"
 	"strings"
 	"sync"
@@ -58,6 +59,7 @@ type JobManager struct {
 	lastAIMetric         map[string]database.ReplicationMetric
 	lastComplianceReport map[string]time.Time
 	closing              int32
+	Protection           *protection.Controller
 }
 
 func New(db *sqlx.DB, cfg *config.Config, hub Hub) *JobManager {
@@ -85,6 +87,10 @@ func New(db *sqlx.DB, cfg *config.Config, hub Hub) *JobManager {
 		lastAIAnalysis:       make(map[string]time.Time),
 		lastAIMetric:         make(map[string]database.ReplicationMetric),
 		lastComplianceReport: make(map[string]time.Time),
+		Protection:           protection.New(db, cfg.Protection),
+	}
+	if cfg.Protection.Enabled {
+		_ = database.SetProtectionEnabled(db, true)
 	}
 
 	if strings.EqualFold(cfg.Server.Mode, "test") {
@@ -118,7 +124,8 @@ func New(db *sqlx.DB, cfg *config.Config, hub Hub) *JobManager {
 		}
 	}()
 
-	jm.wg.Add(6)
+	jm.wg.Add(7)
+	go jm.watchProtection()
 	go jm.startPruning()
 	go jm.startAIAnalysis()
 	go jm.startHistoricalAnalysis()
@@ -398,6 +405,59 @@ func (jm *JobManager) RestartAllJobs() error {
 	return nil
 }
 
+func (jm *JobManager) HaltRunningJobs(reason string) {
+	jm.Mu.Lock()
+	ids := make([]string, 0, len(jm.KafMirrors))
+	mirrors := make([]kafka.KafMirror, 0, len(jm.KafMirrors))
+	for id, mirror := range jm.KafMirrors {
+		ids = append(ids, id)
+		mirrors = append(mirrors, mirror)
+		delete(jm.KafMirrors, id)
+	}
+	jm.Mu.Unlock()
+	if len(mirrors) == 0 {
+		return
+	}
+	logger.Error("halting %d replication jobs: %s", len(mirrors), reason)
+	for i, mirror := range mirrors {
+		mirror.Stop()
+		job, err := database.GetJob(jm.Db, ids[i])
+		if err != nil {
+			continue
+		}
+		job.Status = "paused"
+		r := reason
+		job.FailedReason = &r
+		_ = database.UpdateJob(jm.Db, job)
+	}
+}
+
+func (jm *JobManager) watchProtection() {
+	defer jm.wg.Done()
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	wasHalted := false
+	for {
+		select {
+		case <-ticker.C:
+			if jm.Protection == nil {
+				continue
+			}
+			st := jm.Protection.Status()
+			if st.Halted {
+				if !wasHalted {
+					jm.HaltRunningJobs(st.HaltReason)
+				}
+				wasHalted = true
+			} else {
+				wasHalted = false
+			}
+		case <-jm.close:
+			return
+		}
+	}
+}
+
 func (jm *JobManager) RestartJob(jobID string) error {
 	job, err := database.GetJob(jm.Db, jobID)
 	if err != nil {
@@ -531,6 +591,12 @@ func (jm *JobManager) StartJob(jobID string) error {
 		return err
 	}
 
+	if jm.Protection != nil {
+		if err := jm.Protection.GuardStart(targetCluster.Role); err != nil {
+			return err
+		}
+	}
+
 	mappings, err := database.GetMappingsForJob(jm.Db, jobID)
 	if err != nil {
 		logger.Error("Failed to get mappings for job %s: %v", jobID, err)
@@ -548,6 +614,16 @@ func (jm *JobManager) StartJob(jobID string) error {
 	if err != nil {
 		logger.Error("Failed to create KafMirror for job %s: %v", jobID, err)
 		return err
+	}
+
+	if inspector, ok := kafMirror.(kafka.RecordInspector); ok && jm.Protection != nil {
+		inspector.SetRecordHook(func(topic string, key, value []byte) {
+			if reason := jm.Protection.Ingest(topic, key, value); reason != "" {
+				logger.Error("protection auto-halt: %s", reason)
+				_ = jm.Protection.Halt(reason, "auto")
+				go jm.HaltRunningJobs(reason)
+			}
+		})
 	}
 
 	logger.Info("Starting job '%s' (%s)", job.Name, jobID)
@@ -581,6 +657,20 @@ func (jm *JobManager) StartJob(jobID string) error {
 
 // ProcessMetrics is the callback function for the kaf-mirror to send metrics.
 func (jm *JobManager) ProcessMetrics(metric database.ReplicationMetric) {
+	if jm.Protection != nil {
+		if reason := jm.Protection.Observe(protection.Sample{
+			Consumed:   int64(metric.MessagesConsumed),
+			Produced:   int64(metric.MessagesReplicated),
+			Bytes:      int64(metric.BytesTransferred),
+			Errors:     int64(metric.ErrorCount),
+			Tombstones: metric.TombstoneCount,
+			Lag:        int64(metric.CurrentLag),
+		}); reason != "" {
+			logger.Error("protection auto-halt: %s", reason)
+			_ = jm.Protection.Halt(reason, "auto")
+			go jm.HaltRunningJobs(reason)
+		}
+	}
 	if jm.metricsSink != nil {
 		if err := jm.metricsSink.Send(metric); err != nil {
 			logger.Error("Failed to send metric to sink: %v", err)
@@ -1877,13 +1967,17 @@ func (jm *JobManager) validateMirrorState(jobID string, sourceCluster, targetClu
 	topicMap := make(map[string]string)
 	var enabledTopics []string
 	for _, mapping := range mappings {
-		if mapping.Enabled {
-			topicMap[mapping.SourceTopicPattern] = mapping.TargetTopicPattern
-			enabledTopics = append(enabledTopics, mapping.SourceTopicPattern)
+		if !mapping.Enabled {
+			continue
 		}
+		topicMap[mapping.SourceTopicPattern] = mapping.TargetTopicPattern
+		if strings.ContainsAny(mapping.SourceTopicPattern, `.*+?()[]{}^$|`) {
+			continue
+		}
+		enabledTopics = append(enabledTopics, mapping.SourceTopicPattern)
 	}
 
-	if len(enabledTopics) == 0 {
+	if len(topicMap) == 0 {
 		return fmt.Errorf("no enabled topic mappings found")
 	}
 
@@ -1905,28 +1999,25 @@ func (jm *JobManager) validateMirrorState(jobID string, sourceCluster, targetClu
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	sourceTopicHealth, err := sourceAdmin.CheckTopicHealth(ctx, enabledTopics)
-	if err != nil {
-		return fmt.Errorf("failed to check source topics health: %v", err)
-	}
-
-	for _, health := range sourceTopicHealth {
-		if !health.IsHealthy {
-			return fmt.Errorf("source topic %s is unhealthy: %d under-replicated partitions",
-				health.Name, health.UnderReplicatedPartitions)
+	if len(enabledTopics) > 0 {
+		sourceTopicHealth, err := sourceAdmin.CheckTopicHealth(ctx, enabledTopics)
+		if err != nil {
+			return fmt.Errorf("failed to check source topics health: %v", err)
+		}
+		for _, health := range sourceTopicHealth {
+			if !health.IsHealthy {
+				return fmt.Errorf("source topic %s is unhealthy: %d under-replicated partitions",
+					health.Name, health.UnderReplicatedPartitions)
+			}
 		}
 	}
 
 	existingProgress, err := database.GetMirrorProgress(jm.Db, jobID)
 	if err == nil && len(existingProgress) > 0 {
 		logger.Info("Found existing mirror progress for job %s - validating for safe restart", jobID)
-
 		consumerGroup := fmt.Sprintf("kaf-mirror-job-%s", jobID)
-		mirrorAnalysis, err := targetAdmin.AnalyzeMirrorState(ctx, sourceAdmin, jobID, topicMap, consumerGroup)
-		if err != nil {
-			logger.Warn("Mirror state analysis failed, proceeding with caution: %v", err)
-		} else if mirrorAnalysis.OffsetComparison != nil && len(mirrorAnalysis.OffsetComparison.CriticalIssues) > 0 {
-			return fmt.Errorf("critical mirror state issues detected: %v", mirrorAnalysis.OffsetComparison.CriticalIssues)
+		if _, err := kafka.VerifyMirror(ctx, sourceAdmin, targetAdmin, topicMap, consumerGroup, enabledTopics); err != nil {
+			logger.Warn("Mirror verify failed, proceeding with caution: %v", err)
 		}
 	}
 
