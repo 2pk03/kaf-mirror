@@ -1,57 +1,99 @@
-# Experimental ransomware protection
+# Replication halt (experimental)
 
-This is an **experiment**, not a guarantee. It is how we are trying to mitigate a failure we already saw in production.
+An admin kill-switch for kaf-mirror. **Off by default.**
 
-**What happened:** the **source** cluster was ransomed. kaf-mirror did what it is built to do and **mirrored everything**, including the attack, onto the live replica. Data **already** written through kafscale to S3 could not be encrypted: those objects are read-only. New apply would still have written ransom payload as new objects.
+If the source cluster is compromised, kaf-mirror will copy that traffic onto the replica unless you stop it. This feature is how you freeze replication. It is experimental: it can false-positive, and it does not protect Kafka itself.
 
-The switch does not make Kafka immutable. It **stops further apply** so the replica and new S3 objects are not filled with poison. The salvage is the already-mirrored kafscale/S3 copy plus a frozen replica.
+## Why this exists
 
-## Enable (admin)
+In a live incident the **source** cluster was ransomed. kaf-mirror kept running and replicated the attack. Data **already** stored by kafscale on S3 was not encrypted — those objects are read-only. New writes from the mirror would still have landed as new (bad) objects.
 
-Protection is off until an admin turns it on.
+This switch stops **new** replication. It does not decrypt the source, and it does not roll back the replica.
+
+## Turn it on
+
+You must be an admin (`protection:manage`).
 
 ```bash
 mirror-cli protection enable
-# or POST /api/v1/protection/enable
+mirror-cli protection status
 ```
 
-YAML `protection.enabled: true` also enables it on process start.
+Same thing over the API: `POST /api/v1/protection/enable`.
 
-Once enabled:
+To arm it at process start, set in config:
 
-- Jobs **into** a cluster with `role: prod` are refused.
-- Halt tripwires are armed.
+```yaml
+protection:
+  enabled: true
+  halt_file: "data/HALT"
+  halt_env: "KAF_MIRROR_HALT"
+  auto_halt:
+    enabled: true
+```
 
-Label clusters when you add them: `prod`, `dr`, or `other` (`role` on the cluster record).
+Until this is on: no halt file, no env, no auto-stop, and jobs into `prod` clusters are allowed as usual.
 
-## Halt
+## Label clusters
 
-Any of these halt **all running jobs** (pause, do not auto-restart):
+When you add a cluster, set `role`:
 
-1. `mirror-cli protection halt "source compromised"`
-2. `POST /api/v1/protection/halt` with `{"reason":"..."}`
-3. Create the halt file (`data/HALT` by default, `protection.halt_file`)
-4. Set `KAF_MIRROR_HALT=1` (`protection.halt_env`)
-5. Auto-halt (experimental): tombstone storm, produce/auth error burst, payload inflation while source lag collapses, or **high-entropy rewrite of existing keys** (the encrypt-in-place pattern). Entropy and key-rewrite share the same `protection` / `auto_halt` switch — no per-detector knobs.
+| Role | Meaning |
+|---|---|
+| `prod` | Production. While protection is on, kaf-mirror will **not** start a job that writes **into** this cluster. |
+| `dr` | Replica / DR (including a kafscale/S3-backed cluster). |
+| `other` | Default. No extra rule. |
 
-Resume (`protection resume`) clears the API/DB halt only. **Remove the file and unset the env** or the process stays halted. Jobs do not restart by themselves; start them after you trust the source.
+Mark the live source `prod` and the replica `dr`.
 
-Out-of-band file/env still work if the API is unusable.
+## Stop all replication (halt)
+
+Any of these pause **every running job**. Jobs stay paused until an admin starts them again.
+
+| How | Command |
+|---|---|
+| CLI | `mirror-cli protection halt "source compromised"` |
+| API | `POST /api/v1/protection/halt` with `{"reason":"source compromised"}` |
+| File | create `data/HALT` (path is `protection.halt_file`) |
+| Env | `KAF_MIRROR_HALT=1` (name is `protection.halt_env`) |
+| Auto | traffic looks like encryption or a delete storm (see below) |
+
+Use the **file or env** if the API is down. The dashboard shows a banner when halt is active.
+
+## Resume
+
+Halt from the CLI/API is cleared with:
+
+```bash
+mirror-cli protection resume
+```
+
+That does **not** clear a halt file or `KAF_MIRROR_HALT`. Remove the file and unset the env or replication stays stopped.
+
+Resume does **not** restart jobs. When you trust the source:
+
+```bash
+mirror-cli jobs start <job-id>
+```
+
+## Automatic halt
+
+When protection is on, `auto_halt.enabled` is also on (same experiment — there are no per-detector toggles).
+
+kaf-mirror samples records and will halt if:
+
+- Many **existing keys** get new **high-entropy** values (looks like encrypt-in-place on the source), or a large volume of high-entropy payloads when keys are unique
+- A flood of **empty values** (tombstones / deletes)
+- A burst of produce/auth errors
+- Payloads get much larger while source lag suddenly drops
+
+These are heuristics. They can fire on a legitimate bulk rewrite. If you already know the source is bad, halt yourself; do not wait for auto.
+
+Automatic halt cannot see ransomware that only encrypts **S3 objects** under kafscale (for example SSE-C). That is outside the Kafka consume path. Already-written S3 objects staying read-only is still what saved data in the incident.
 
 ## What this does not do
 
-- It does not encrypt-proof Kafka. kafscale/S3 already-written objects were safe because they are read-only.
-- It does not delay apply by N minutes (no buffer).
-- Cross-cluster high watermarks are **not** a proof that source and target match. Verify uses **source consumer-group lag** and topic presence.
-
-## Auto-halt
-
-Off unless protection is enabled (`auto_halt.enabled`, default true in config). All detectors share that switch.
-
-The live incident was ciphertext **rewritten onto existing keys**, not tombstones. Detectors:
-
-- **Entropy vs per-topic baseline** (Shannon on up to 1KiB of the value). Absolute high entropy is not enough — compressed protobuf already looks random. The baseline only moves on *normal* samples so a ciphertext flood cannot redefine “typical”.
-- **Key rewrite rate**: same key, new value, many keys in 60s.
-- Halt if both fire, or if entropy is high on a large volume of records (unique-key topics have no rewrite signal).
-
-Coarse. Prefer the admin halt or the HALT file when you know source is on fire. This does not see S3 SSE-C encryption under kafscale; those objects are storage-side.
+- Make Kafka or the replica ransomware-proof
+- Delay replication by N minutes
+- Prove source and target have the same records (offsets are per cluster). `validate-mirror` uses **source consumer-group lag** and whether topics exist.
+- Unlock or restore encrypted source data

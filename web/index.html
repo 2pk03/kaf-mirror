@@ -507,11 +507,11 @@
                     if (!el || !st) return;
                     if (st.halted) {
                         el.style.display = 'block';
-                        el.textContent = 'REPLICATION HALTED (experimental): ' + (st.halt_reason || 'tripwire') + '. Already-mirrored kafscale/S3 data stays read-only; live apply is frozen.';
+                        el.textContent = 'Replication halted: ' + (st.halt_reason || 'halt file or KAF_MIRROR_HALT') + '. All jobs are paused. Resume does not restart them.';
                     } else if (st.enabled) {
                         el.style.display = 'block';
                         el.style.background = '#e65100';
-                        el.textContent = 'Protection enabled (experimental). Writes into prod clusters are refused. Halt with mirror-cli protection halt or data/HALT.';
+                        el.textContent = 'Replication halt is on (experimental). Jobs that write into a prod cluster are blocked. To freeze all jobs: mirror-cli protection halt';
                     } else {
                         el.style.display = 'none';
                     }

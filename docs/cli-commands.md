@@ -908,12 +908,12 @@ mirror-cli users
 
 ### mirror-cli protection
 
-**Experimental ransomware halt.** Off until `protection enable`. See `docs/protection.md`.
+Admin kill-switch. Off until you run `enable`. Full runbook: [protection.md](protection.md).
 
-- **status** - Show enabled/halted tripwires.
-- **enable** - Arm protection (admin).
-- **halt [reason]** - Stop all jobs.
-- **resume** - Clear the API halt (file/env still apply).
+- **status** — enabled or halted, and why
+- **enable** — turn the feature on (admin)
+- **halt [reason]** — pause every running job
+- **resume** — clear a CLI/API halt. Delete `data/HALT` and unset `KAF_MIRROR_HALT` if you used those. Does not restart jobs.
 - **delete** - Delete a user.
 - **list** - List all users.
 - **reset-password** - Reset a user's password (admin only).
