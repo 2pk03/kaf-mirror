@@ -126,8 +126,38 @@
 </tr>
 
 <tr>
-<td><code>POST /auth/token</code></td>
+<td><code>GET /metrics</code></td>
 <td><code>any</code></td>
+</tr>
+
+<tr>
+<td><code>POST /auth/token</code></td>
+<td><code>any</code> (rate limited)</td>
+</tr>
+
+<tr>
+<td><code>GET /api/v1/protection/</code></td>
+<td>any authenticated user</td>
+</tr>
+
+<tr>
+<td><code>POST /api/v1/protection/enable</code></td>
+<td><code>protection:manage</code> (admin)</td>
+</tr>
+
+<tr>
+<td><code>POST /api/v1/protection/disable</code></td>
+<td><code>protection:manage</code> (admin)</td>
+</tr>
+
+<tr>
+<td><code>POST /api/v1/protection/halt</code></td>
+<td><code>protection:manage</code> (admin)</td>
+</tr>
+
+<tr>
+<td><code>POST /api/v1/protection/resume</code></td>
+<td><code>protection:manage</code> (admin)</td>
 </tr>
 </tbody>
 </table>
@@ -146,6 +176,11 @@
 <tr>
 <td><code>GET /auth/me</code></td>
 <td><code>any</code></td>
+</tr>
+
+<tr>
+<td><code>POST /api/v1/auth/reset-token</code></td>
+<td><code>any</code> authenticated</td>
 </tr>
 </tbody>
 </table>

@@ -26,12 +26,30 @@ definitions:
       performanceOptimization:
         type: boolean
     type: object
+  config.AutoHaltConfig:
+    properties:
+      authErrorBurst:
+        type: integer
+      enabled:
+        type: boolean
+      tombstoneMin:
+        type: integer
+      tombstoneRatio:
+        type: number
+    type: object
   config.ClusterConfig:
     properties:
       brokers:
         type: string
       clusterID:
         type: string
+      disableIdempotentWrites:
+        description: |-
+          DisableIdempotentWrites forces the producer into non-idempotent mode.
+          Set this to true when the target broker does not implement the
+          Kafka INIT_PRODUCER_ID API (API key 22). As of 2026-04, this applies
+          to KafScale; see OPS-004.
+        type: boolean
       provider:
         type: string
       security:
@@ -68,10 +86,14 @@ definitions:
         $ref: '#/definitions/config.ComplianceConfig'
       database:
         $ref: '#/definitions/config.DatabaseConfig'
+      egress:
+        $ref: '#/definitions/config.EgressConfig'
       logging:
         $ref: '#/definitions/config.LoggingConfig'
       monitoring:
         $ref: '#/definitions/config.MonitoringConfig'
+      protection:
+        $ref: '#/definitions/config.ProtectionConfig'
       replication:
         $ref: '#/definitions/config.ReplicationConfig'
       server:
@@ -87,6 +109,13 @@ definitions:
         type: string
       retentionDays:
         type: integer
+    type: object
+  config.EgressConfig:
+    properties:
+      allowedHosts:
+        items:
+          type: string
+        type: array
     type: object
   config.LoggingConfig:
     properties:
@@ -127,6 +156,19 @@ definitions:
       pushGateway:
         type: string
     type: object
+  config.ProtectionConfig:
+    properties:
+      autoHalt:
+        $ref: '#/definitions/config.AutoHaltConfig'
+      enabled:
+        type: boolean
+      haltEnv:
+        type: string
+      haltFile:
+        type: string
+      refuseWriteToProd:
+        type: boolean
+    type: object
   config.ReplicationConfig:
     properties:
       batchSize:
@@ -142,24 +184,24 @@ definitions:
     type: object
   config.SecurityConfig:
     properties:
-      apikey:
+      api_key:
         type: string
-      apisecret:
+      api_secret:
         type: string
-      connectionString:
+      connection_string:
         type: string
       enabled:
         type: boolean
       kerberos:
         properties:
-          serviceName:
+          service_name:
             type: string
         type: object
       password:
         type: string
       protocol:
         type: string
-      saslmechanism:
+      sasl_mechanism:
         type: string
       username:
         type: string
@@ -175,6 +217,8 @@ definitions:
     properties:
       adminEmail:
         type: string
+      allowInsecure:
+        type: boolean
       cors:
         properties:
           allowedOrigins:
@@ -424,6 +468,8 @@ definitions:
         type: string
       provider:
         type: string
+      role:
+        type: string
       security_config:
         type: string
       status:
@@ -576,6 +622,8 @@ definitions:
         type: boolean
       timestamp:
         type: string
+      tombstone_count:
+        type: integer
     type: object
   database.ResumePoint:
     properties:
@@ -671,6 +719,29 @@ definitions:
       under_replicated_partitions:
         type: integer
     type: object
+  protection.Status:
+    properties:
+      auto_halt_enabled:
+        type: boolean
+      enabled:
+        type: boolean
+      env_tripwire:
+        type: boolean
+      experimental:
+        type: boolean
+      file_tripwire:
+        type: boolean
+      halt_reason:
+        type: string
+      halted:
+        type: boolean
+      halted_at:
+        type: string
+      halted_by:
+        type: string
+      refuse_write_to_prod:
+        type: boolean
+    type: object
   server.CreateJobRequest:
     properties:
       batch_size:
@@ -692,6 +763,11 @@ definitions:
           $ref: '#/definitions/database.TopicMapping'
         type: array
     type: object
+  server.HaltProtectionRequest:
+    properties:
+      reason:
+        type: string
+    type: object
   server.changePasswordRequest:
     properties:
       new_password:
@@ -708,13 +784,6 @@ definitions:
       username:
         type: string
     type: object
-  server.tokenRequest:
-    properties:
-      password:
-        type: string
-      username:
-        type: string
-    type: object
   server.updateUserRoleRequest:
     properties:
       role:
@@ -726,7 +795,7 @@ info:
   description: This is the API for kaf-mirror, a high-performance Kafka replication
     tool.
   title: kaf-mirror API
-  version: "1.0"
+  version: 1.2.0
 paths:
   /ai/anomalies:
     get:
@@ -866,29 +935,6 @@ paths:
       summary: Get the current user's profile
       tags:
       - auth
-  /auth/token:
-    post:
-      consumes:
-      - application/json
-      description: Generate a new API token for the authenticated user.
-      parameters:
-      - description: User credentials
-        in: body
-        name: credentials
-        required: true
-        schema:
-          $ref: '#/definitions/server.tokenRequest'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties: true
-            type: object
-      summary: Generate a new API token
-      tags:
-      - auth
   /clusters:
     get:
       description: Get a list of all configured Kafka clusters.
@@ -909,7 +955,8 @@ paths:
     post:
       consumes:
       - application/json
-      description: Create a new Kafka cluster configuration.
+      description: Create a new Kafka cluster. Optional role is prod, dr, or other
+        (default other).
       parameters:
       - description: Kafka Cluster
         in: body
@@ -2190,6 +2237,99 @@ paths:
       summary: Stop all replication jobs
       tags:
       - jobs
+  /protection:
+    get:
+      description: Experimental kill-switch. Off until an admin enables it. Any authenticated
+        user can read status.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/protection.Status'
+      security:
+      - ApiKeyAuth: []
+      summary: Get replication-halt status
+      tags:
+      - protection
+  /protection/disable:
+    post:
+      description: Turns the kill-switch off and clears an API halt. Does not restart
+        jobs. Admin, protection:manage.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/protection.Status'
+      security:
+      - ApiKeyAuth: []
+      summary: Disable replication halt
+      tags:
+      - protection
+  /protection/enable:
+    post:
+      description: Turns on the experimental kill-switch (admin, protection:manage).
+        Jobs into prod clusters are then refused.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/protection.Status'
+      security:
+      - ApiKeyAuth: []
+      summary: Enable replication halt
+      tags:
+      - protection
+  /protection/halt:
+    post:
+      consumes:
+      - application/json
+      description: Pauses every running job. Protection must already be enabled. Admin,
+        protection:manage.
+      parameters:
+      - description: Halt reason
+        in: body
+        name: request
+        schema:
+          $ref: '#/definitions/server.HaltProtectionRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/protection.Status'
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - ApiKeyAuth: []
+      summary: Halt all replication jobs
+      tags:
+      - protection
+  /protection/resume:
+    post:
+      description: Clears a CLI/API halt only. Remove data/HALT and unset KAF_MIRROR_HALT
+        if you used those. Does not restart jobs. Admin, protection:manage.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/protection.Status'
+      security:
+      - ApiKeyAuth: []
+      summary: Resume after an API halt
+      tags:
+      - protection
   /topics/source:
     get:
       description: Get a list of all topics from the source cluster.

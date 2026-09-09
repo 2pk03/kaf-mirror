@@ -195,7 +195,7 @@ func (s *Server) handleListClusters(c *fiber.Ctx) error {
 
 // handleCreateCluster godoc
 // @Summary Create a new Kafka cluster
-// @Description Create a new Kafka cluster configuration.
+// @Description Create a new Kafka cluster. Optional role is prod, dr, or other (default other).
 // @Tags clusters
 // @Accept json
 // @Produce json
@@ -502,6 +502,10 @@ type CreateJobRequest struct {
 	Parallelism        int                     `json:"parallelism"`
 	Compression        string                  `json:"compression"`
 	PreservePartitions bool                    `json:"preserve_partitions"`
+}
+
+type HaltProtectionRequest struct {
+	Reason string `json:"reason"`
 }
 
 // handleCreateJob godoc
@@ -1655,6 +1659,14 @@ func (s *Server) handleResetOwnToken(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"token": token})
 }
 
+// handleGetProtection godoc
+// @Summary Get replication-halt status
+// @Description Experimental kill-switch. Off until an admin enables it. Any authenticated user can read status.
+// @Tags protection
+// @Produce json
+// @Success 200 {object} protection.Status
+// @Router /protection [get]
+// @Security ApiKeyAuth
 func (s *Server) handleGetProtection(c *fiber.Ctx) error {
 	if s.manager.Protection == nil {
 		return c.JSON(fiber.Map{"enabled": false, "experimental": true})
@@ -1662,6 +1674,14 @@ func (s *Server) handleGetProtection(c *fiber.Ctx) error {
 	return c.JSON(s.manager.Protection.Status())
 }
 
+// handleEnableProtection godoc
+// @Summary Enable replication halt
+// @Description Turns on the experimental kill-switch (admin, protection:manage). Jobs into prod clusters are then refused.
+// @Tags protection
+// @Produce json
+// @Success 200 {object} protection.Status
+// @Router /protection/enable [post]
+// @Security ApiKeyAuth
 func (s *Server) handleEnableProtection(c *fiber.Ctx) error {
 	if s.manager.Protection == nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "protection controller missing")
@@ -1672,6 +1692,14 @@ func (s *Server) handleEnableProtection(c *fiber.Ctx) error {
 	return c.JSON(s.manager.Protection.Status())
 }
 
+// handleDisableProtection godoc
+// @Summary Disable replication halt
+// @Description Turns the kill-switch off and clears an API halt. Does not restart jobs. Admin, protection:manage.
+// @Tags protection
+// @Produce json
+// @Success 200 {object} protection.Status
+// @Router /protection/disable [post]
+// @Security ApiKeyAuth
 func (s *Server) handleDisableProtection(c *fiber.Ctx) error {
 	if s.manager.Protection == nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "protection controller missing")
@@ -1683,13 +1711,22 @@ func (s *Server) handleDisableProtection(c *fiber.Ctx) error {
 	return c.JSON(s.manager.Protection.Status())
 }
 
+// handleHaltProtection godoc
+// @Summary Halt all replication jobs
+// @Description Pauses every running job. Protection must already be enabled. Admin, protection:manage.
+// @Tags protection
+// @Accept json
+// @Produce json
+// @Param request body server.HaltProtectionRequest false "Halt reason"
+// @Success 200 {object} protection.Status
+// @Failure 409 {object} map[string]interface{}
+// @Router /protection/halt [post]
+// @Security ApiKeyAuth
 func (s *Server) handleHaltProtection(c *fiber.Ctx) error {
 	if s.manager.Protection == nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "protection controller missing")
 	}
-	var req struct {
-		Reason string `json:"reason"`
-	}
+	var req HaltProtectionRequest
 	_ = c.BodyParser(&req)
 	user, _ := c.Locals("user").(*database.User)
 	by := "admin"
@@ -1703,6 +1740,14 @@ func (s *Server) handleHaltProtection(c *fiber.Ctx) error {
 	return c.JSON(s.manager.Protection.Status())
 }
 
+// handleResumeProtection godoc
+// @Summary Resume after an API halt
+// @Description Clears a CLI/API halt only. Remove data/HALT and unset KAF_MIRROR_HALT if you used those. Does not restart jobs. Admin, protection:manage.
+// @Tags protection
+// @Produce json
+// @Success 200 {object} protection.Status
+// @Router /protection/resume [post]
+// @Security ApiKeyAuth
 func (s *Server) handleResumeProtection(c *fiber.Ctx) error {
 	if s.manager.Protection == nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "protection controller missing")

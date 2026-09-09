@@ -21,6 +21,22 @@ mirror-cli protection status
 
 Same thing over the API: `POST /api/v1/protection/enable`.
 
+### API
+
+Base path `/api/v1`. Auth: `Authorization: Bearer <token>`.
+
+| Method | Path | Who | What |
+|---|---|---|---|
+| GET | `/protection` | any logged-in user | Status (enabled, halted, reason) |
+| POST | `/protection/enable` | admin (`protection:manage`) | Turn the feature on |
+| POST | `/protection/disable` | admin | Turn it off and clear an API halt |
+| POST | `/protection/halt` | admin | Pause every job. Body: `{"reason":"..."}` |
+| POST | `/protection/resume` | admin | Clear an API halt. Does not restart jobs. Does not clear `data/HALT` or `KAF_MIRROR_HALT`. |
+
+Cluster create/update JSON includes `role`: `prod`, `dr`, or `other`.
+
+Swagger: `/swagger/index.html` (tag **protection**).
+
 To arm it at process start, set in config:
 
 ```yaml
