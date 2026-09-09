@@ -826,7 +826,7 @@ mirror-cli logout
 
 **Replication halt (experimental, admin)**
 
-Kill-switch for kaf-mirror. Off until enable. See docs/protection.md.
+Kill-switch for kaf-mirror. Off until an admin runs `mirror-cli protection enable` (must be logged in). See [protection.md](protection.md).
 
 ### Usage
 

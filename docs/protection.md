@@ -12,14 +12,18 @@ This switch stops **new** replication. It does not decrypt the source, and it do
 
 ## Turn it on
 
-You must be an admin (`protection:manage`).
+You must be an admin (`protection:manage`). From the CLI:
 
 ```bash
+mirror-cli login
 mirror-cli protection enable
 mirror-cli protection status
+mirror-cli protection halt "source compromised"
+mirror-cli protection resume     # does not restart jobs
+mirror-cli protection disable
 ```
 
-Same thing over the API: `POST /api/v1/protection/enable`.
+A non-admin token gets 403. Same operations over the API: `POST /api/v1/protection/enable` (and `disable`, `halt`, `resume`). Full command list: [cli-commands.md](cli-commands.md).
 
 ### API
 
@@ -60,7 +64,12 @@ When you add a cluster, set `role`:
 | `dr` | Replica / DR (including a kafscale/S3-backed cluster). |
 | `other` | Default. No extra rule. |
 
-Mark the live source `prod` and the replica `dr`.
+Mark the live source `prod` and the replica `dr`. The CLI asks for this on add and edit:
+
+```bash
+mirror-cli clusters add
+mirror-cli clusters edit
+```
 
 ## Stop all replication (halt)
 
