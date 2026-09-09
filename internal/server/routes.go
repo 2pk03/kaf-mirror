@@ -74,6 +74,14 @@ func (s *Server) setupRoutes() {
 	jobsGroup.Get("/:id/lag", middleware.PermissionRequired(s.Db, "metrics:view"), s.handleGetLag)
 	jobsGroup.Get("/:id/topic-health", middleware.PermissionRequired(s.Db, "jobs:view"), s.handleGetJobTopicHealth)
 
+	protect := api.Group("/protection")
+	protect.Get("", s.handleGetProtection)
+	protect.Get("/", s.handleGetProtection)
+	protect.Post("/enable", middleware.PermissionRequired(s.Db, "protection:manage"), s.handleEnableProtection)
+	protect.Post("/disable", middleware.PermissionRequired(s.Db, "protection:manage"), s.handleDisableProtection)
+	protect.Post("/halt", middleware.PermissionRequired(s.Db, "protection:manage"), s.handleHaltProtection)
+	protect.Post("/resume", middleware.PermissionRequired(s.Db, "protection:manage"), s.handleResumeProtection)
+
 	api.Get("/topics/source", middleware.PermissionRequired(s.Db, "clusters:view"), s.handleListSourceTopics)
 	api.Get("/topics/target", middleware.PermissionRequired(s.Db, "clusters:view"), s.handleListTargetTopics)
 

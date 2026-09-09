@@ -380,8 +380,50 @@ func addAggregatedMetricsTable(db *sqlx.DB) error {
 	if err := ensureAggregatedMetricsColumns(db); err != nil {
 		return err
 	}
+	if err := ensureProtectionSchema(db); err != nil {
+		return err
+	}
 
 	return nil
+}
+
+func ensureProtectionSchema(db *sqlx.DB) error {
+	cols := make(map[string]bool)
+	rows, err := db.Queryx("PRAGMA table_info(kafka_clusters)")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt interface{}
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		cols[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !cols["role"] {
+		if _, err := db.Exec(`ALTER TABLE kafka_clusters ADD COLUMN role TEXT NOT NULL DEFAULT 'other'`); err != nil {
+			return err
+		}
+	}
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS protection_state (
+		id INTEGER PRIMARY KEY CHECK (id = 1),
+		enabled INTEGER NOT NULL DEFAULT 0,
+		halted INTEGER NOT NULL DEFAULT 0,
+		halt_reason TEXT,
+		halted_at DATETIME,
+		halted_by TEXT
+	)`); err != nil {
+		return err
+	}
+	_, err = db.Exec(`INSERT OR IGNORE INTO protection_state (id, enabled, halted) VALUES (1, 0, 0)`)
+	return err
 }
 
 func ensureAggregatedMetricsColumns(db *sqlx.DB) error {

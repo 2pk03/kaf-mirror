@@ -24,6 +24,7 @@
 - **Dashboard updates:** The web UI polls the API every 30 seconds. `/ws` accepts authenticated WebSocket clients via an `Authorization: Bearer` header.
 - **Offset commit:** Source offsets are committed only after the target produce is acknowledged.
 - **Secrets:** Cluster and config APIs return `***` for credentials. PUT with `***` or an empty secret leaves the stored value unchanged.
+- **Experimental ransomware halt:** Admin-enabled. Stops further apply if the source is compromised so the replica is not filled with ransom writes. Data already on kafscale/S3 (read-only) is out of reach of that encryption. See [docs/protection.md](docs/protection.md).
 
 ## Getting Started
 

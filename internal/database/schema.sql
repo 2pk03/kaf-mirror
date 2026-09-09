@@ -23,7 +23,17 @@ CREATE TABLE IF NOT EXISTS kafka_clusters (
     api_secret TEXT,
     connection_string TEXT,
     status TEXT DEFAULT 'unknown',
+    role TEXT NOT NULL DEFAULT 'other',
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS protection_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    enabled INTEGER NOT NULL DEFAULT 0,
+    halted INTEGER NOT NULL DEFAULT 0,
+    halt_reason TEXT,
+    halted_at DATETIME,
+    halted_by TEXT
 );
 
 -- Replication Jobs: Stores replication job definitions

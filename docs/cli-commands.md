@@ -905,6 +905,15 @@ mirror-cli users
 
 - **add** - Add a new user.
 - **change-password** - Change the current user's password (minimum 12 characters). Existing tokens are revoked.
+
+### mirror-cli protection
+
+**Experimental ransomware halt.** Off until `protection enable`. See `docs/protection.md`.
+
+- **status** - Show enabled/halted tripwires.
+- **enable** - Arm protection (admin).
+- **halt [reason]** - Stop all jobs.
+- **resume** - Clear the API halt (file/env still apply).
 - **delete** - Delete a user.
 - **list** - List all users.
 - **reset-password** - Reset a user's password (admin only).

@@ -384,17 +384,18 @@ func (r *KafMirrorImpl) collectMetrics(ctx context.Context, jobID string, callba
 
 			metric := database.ReplicationMetric{
 				JobID:              jobID,
-				MessagesReplicated: int(totalMessages),      // Total messages replicated (acked)
-				BytesTransferred:   int(totalBytes),         // Total bytes transferred (acked)
-				MessagesConsumed:   int(totalConsumed),      // Total messages consumed
-				BytesConsumed:      int(totalConsumedBytes), // Total bytes consumed
-				CurrentLag:         int(currentLag),         // Current consumer lag
-				ErrorCount:         int(totalErrors),        // Total errors
+				MessagesReplicated: int(totalMessages),
+				BytesTransferred:   int(totalBytes),
+				MessagesConsumed:   int(totalConsumed),
+				BytesConsumed:      int(totalConsumedBytes),
+				CurrentLag:         int(currentLag),
+				ErrorCount:         int(totalErrors),
 				SourceStalled:      sourceStalled,
 				TargetStalled:      targetStalled,
 				CriticalLag:        criticalLag,
 				HighErrorRate:      highErrorRate,
 				ErrorSpike:         errorSpike,
+				TombstoneCount:     consumerMetrics.Tombstones,
 				Timestamp:          time.Now(),
 			}
 

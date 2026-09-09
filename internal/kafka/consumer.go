@@ -31,12 +31,14 @@ type ConsumerMetrics struct {
 	RecordsProcessed int64
 	BytesProcessed   int64
 	ConsumerLag      int64
+	Tombstones       int64
 }
 
 type Consumer struct {
 	Client           KgoClient
 	recordsProcessed int64
 	bytesProcessed   int64
+	tombstones       int64
 	jobID            string
 	mu               sync.RWMutex
 	highWaterMarks   map[string]map[int32]int64
@@ -203,9 +205,6 @@ func (c *Consumer) Consume(ctx context.Context, handler func(*kgo.Record) error)
 			fetches.EachRecord(func(record *kgo.Record) {
 				recordCount++
 
-				atomic.AddInt64(&c.recordsProcessed, 1)
-				atomic.AddInt64(&c.bytesProcessed, int64(len(record.Value)+len(record.Key)))
-
 				c.mu.Lock()
 				if c.lastOffsets == nil {
 					c.lastOffsets = make(map[string]map[int32]int64)
@@ -219,6 +218,11 @@ func (c *Consumer) Consume(ctx context.Context, handler func(*kgo.Record) error)
 				if err := handler(record); err != nil {
 					logger.Error("Consumer: handler failed for topic %s partition %d offset %d: %v", record.Topic, record.Partition, record.Offset, err)
 					return
+				}
+				atomic.AddInt64(&c.recordsProcessed, 1)
+				atomic.AddInt64(&c.bytesProcessed, int64(len(record.Value)+len(record.Key)))
+				if len(record.Value) == 0 {
+					atomic.AddInt64(&c.tombstones, 1)
 				}
 				if err := c.Client.CommitRecords(ctx, record); err != nil {
 					logger.Error("Consumer: failed to commit offset for topic %s partition %d offset %d: %v", record.Topic, record.Partition, record.Offset, err)
@@ -255,6 +259,7 @@ func (c *Consumer) GetMetrics() ConsumerMetrics {
 		RecordsProcessed: atomic.LoadInt64(&c.recordsProcessed),
 		BytesProcessed:   atomic.LoadInt64(&c.bytesProcessed),
 		ConsumerLag:      calculatedLag,
+		Tombstones:       atomic.LoadInt64(&c.tombstones),
 	}
 }
 

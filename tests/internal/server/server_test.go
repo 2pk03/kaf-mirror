@@ -669,6 +669,52 @@ func TestImportConfigValidates(t *testing.T) {
 	assert.Equal(t, 400, resp.StatusCode)
 }
 
+func TestProtectionHaltAndRefuseProd(t *testing.T) {
+	ctx := setupTestServer(t)
+	assert.NoError(t, database.CreateCluster(ctx.Server.Db, &database.KafkaCluster{
+		Name: "prod-src", Provider: "plain", Brokers: "localhost:9092", Role: "prod",
+	}))
+	assert.NoError(t, database.CreateCluster(ctx.Server.Db, &database.KafkaCluster{
+		Name: "prod-dst", Provider: "plain", Brokers: "localhost:9093", Role: "prod",
+	}))
+
+	enable, err := http.NewRequest("POST", "/api/v1/protection/enable", nil)
+	assert.NoError(t, err)
+	addAuthHeader(enable, ctx.Token)
+	resp, err := ctx.Server.App.Test(enable)
+	assert.NoError(t, err)
+	assert.Equal(t, 200, resp.StatusCode)
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"name": "into-prod", "source_cluster_name": "prod-src", "target_cluster_name": "prod-dst",
+	})
+	req := httptest.NewRequest("POST", "/api/v1/jobs", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	addAuthHeader(req, ctx.Token)
+	resp, err = ctx.Server.App.Test(req)
+	assert.NoError(t, err)
+	assert.Equal(t, 409, resp.StatusCode)
+
+	halt, err := http.NewRequest("POST", "/api/v1/protection/halt", bytes.NewBufferString(`{"reason":"experiment"}`))
+	assert.NoError(t, err)
+	halt.Header.Set("Content-Type", "application/json")
+	addAuthHeader(halt, ctx.Token)
+	resp, err = ctx.Server.App.Test(halt)
+	assert.NoError(t, err)
+	assert.Equal(t, 200, resp.StatusCode)
+
+	statusReq := httptest.NewRequest("GET", "/api/v1/protection/", nil)
+	addAuthHeader(statusReq, ctx.Token)
+	resp, err = ctx.Server.App.Test(statusReq)
+	assert.NoError(t, err)
+	assert.Equal(t, 200, resp.StatusCode)
+	var st map[string]interface{}
+	assert.NoError(t, json.NewDecoder(resp.Body).Decode(&st))
+	assert.Equal(t, true, st["enabled"])
+	assert.Equal(t, true, st["halted"])
+	assert.Equal(t, true, st["experimental"])
+}
+
 func TestWebSocketAuthRejectsQueryToken(t *testing.T) {
 	ctx := setupTestServer(t)
 	req := httptest.NewRequest("GET", "/ws?token="+ctx.Token, nil)

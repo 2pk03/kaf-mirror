@@ -1615,7 +1615,95 @@ It interacts with the kaf-mirror API to perform various tasks.`,
 
 	jobsCmd := createJobsCommand()
 	docsCmd := createDocsCommand()
-	rootCmd.AddCommand(loginCmd, logoutCmd, usersCmd, clustersCmd, jobsCmd, configCmd, tlsCmd, newDashboardCmd(), whoamiCmd, docsCmd)
+	protectionCmd := &cobra.Command{Use: "protection", Short: "Experimental ransomware halt (admin)."}
+	protectionCmd.AddCommand(&cobra.Command{
+		Use: "status", Short: "Show protection status.",
+		Run: func(cmd *cobra.Command, args []string) {
+			token, err := LoadToken()
+			if err != nil {
+				fmt.Println("Error: You must be logged in.")
+				return
+			}
+			req, _ := http.NewRequest("GET", fmt.Sprintf("%s/api/v1/protection/", BackendURL), nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			resp, err := httpClient.Do(req)
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
+			defer resp.Body.Close()
+			body, _ := ioutil.ReadAll(resp.Body)
+			fmt.Println(string(body))
+		},
+	})
+	protectionCmd.AddCommand(&cobra.Command{
+		Use: "enable", Short: "Enable protection (admin).",
+		Run: func(cmd *cobra.Command, args []string) {
+			token, err := LoadToken()
+			if err != nil {
+				fmt.Println("Error: You must be logged in.")
+				return
+			}
+			req, _ := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/protection/enable", BackendURL), nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			resp, err := httpClient.Do(req)
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
+			defer resp.Body.Close()
+			body, _ := ioutil.ReadAll(resp.Body)
+			fmt.Println(string(body))
+		},
+	})
+	protectionCmd.AddCommand(&cobra.Command{
+		Use: "halt", Short: "Halt all replication (admin).",
+		Run: func(cmd *cobra.Command, args []string) {
+			token, err := LoadToken()
+			if err != nil {
+				fmt.Println("Error: You must be logged in.")
+				return
+			}
+			reason := "admin halt"
+			if len(args) > 0 {
+				reason = strings.Join(args, " ")
+			}
+			reqBody, _ := json.Marshal(map[string]string{"reason": reason})
+			req, _ := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/protection/halt", BackendURL), bytes.NewBuffer(reqBody))
+			req.Header.Set("Authorization", "Bearer "+token)
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := httpClient.Do(req)
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
+			defer resp.Body.Close()
+			body, _ := ioutil.ReadAll(resp.Body)
+			fmt.Println(string(body))
+		},
+	})
+	protectionCmd.AddCommand(&cobra.Command{
+		Use: "resume", Short: "Clear the API halt. File/env tripwires still apply.",
+		Run: func(cmd *cobra.Command, args []string) {
+			token, err := LoadToken()
+			if err != nil {
+				fmt.Println("Error: You must be logged in.")
+				return
+			}
+			req, _ := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/protection/resume", BackendURL), nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			resp, err := httpClient.Do(req)
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
+			defer resp.Body.Close()
+			body, _ := ioutil.ReadAll(resp.Body)
+			fmt.Println(string(body))
+		},
+	})
+
+	rootCmd.AddCommand(loginCmd, logoutCmd, usersCmd, clustersCmd, jobsCmd, configCmd, tlsCmd, newDashboardCmd(), whoamiCmd, docsCmd, protectionCmd)
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 
 	return rootCmd

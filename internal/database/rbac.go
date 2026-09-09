@@ -85,6 +85,7 @@ func SeedDefaultRolesAndPermissions(db *sqlx.DB) error {
 		"roles:manage", "config:view", "config:edit",
 		"compliance:generate", "compliance:view",
 		"inventory:view", "inventory:create",
+		"protection:manage",
 	}
 
 	rolePermissions := map[string][]string{

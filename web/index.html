@@ -293,6 +293,7 @@
             <button class="logout" onclick="logout()">Logout</button>
         </div>
     </div>
+    <div id="protection-banner" style="display:none;background:#b71c1c;color:#fff;padding:0.75rem 1.5rem;font-weight:600;"></div>
     
     <div class="nav">
         <ul>
@@ -496,6 +497,28 @@
             return marked.parse(escapeHtml(value), { async: false });
         }
 
+        function loadProtectionBanner() {
+            const token = getAuthToken();
+            if (!token) return;
+            fetch('/api/v1/protection/', { headers: { 'Authorization': 'Bearer ' + token } })
+                .then(r => r.ok ? r.json() : null)
+                .then(st => {
+                    const el = document.getElementById('protection-banner');
+                    if (!el || !st) return;
+                    if (st.halted) {
+                        el.style.display = 'block';
+                        el.textContent = 'REPLICATION HALTED (experimental): ' + (st.halt_reason || 'tripwire') + '. Already-mirrored kafscale/S3 data stays read-only; live apply is frozen.';
+                    } else if (st.enabled) {
+                        el.style.display = 'block';
+                        el.style.background = '#e65100';
+                        el.textContent = 'Protection enabled (experimental). Writes into prod clusters are refused. Halt with mirror-cli protection halt or data/HALT.';
+                    } else {
+                        el.style.display = 'none';
+                    }
+                })
+                .catch(() => {});
+        }
+
         function getAuthToken() {
             const sessionToken = sessionStorage.getItem('token');
             if (sessionToken) return sessionToken;
@@ -514,6 +537,8 @@
             setupTimeRangeButtons();
             loadData();
             loadVersion();
+            loadProtectionBanner();
+            setInterval(loadProtectionBanner, 5000);
             
             // Set up automatic data refresh every 30 seconds
             setInterval(() => {
